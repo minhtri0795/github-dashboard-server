@@ -10,6 +10,11 @@ async function bootstrap() {
   app.enableCors(corsConfig);
 
   app.useGlobalPipes(new ValidationPipe());
-  await app.listen(process.env.PORT ?? 3000);
+
+  // Heroku dynamically assigns port
+  const port = process.env.PORT || 3000;
+  console.log(`Application starting on port ${port}`);
+
+  await app.listen(port, '0.0.0.0');
 }
 bootstrap();
