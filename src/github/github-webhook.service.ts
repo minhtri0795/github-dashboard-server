@@ -120,7 +120,7 @@ export class GitHubWebhookService {
 
     if (action === 'opened') {
       // Send Discord notification for new PR
-      await this.discordService.sendPROpenedNotification(payload);
+      // await this.discordService.sendPROpenedNotification(payload);
       return await this.pullRequestModel.create(pullRequestData);
     } else if (action === 'closed') {
       // First check if PR exists
@@ -134,7 +134,7 @@ export class GitHubWebhookService {
       }
 
       // Send Discord notification for closed PR if it was merged
-      await this.discordService.sendPRClosedNotification(payload);
+      // await this.discordService.sendPRClosedNotification(payload);
 
       // Update existing PR
       return await this.pullRequestModel.findOneAndUpdate(
@@ -209,7 +209,10 @@ export class GitHubWebhookService {
       }
 
       if (dateFilter.endDate) {
-        filter.created_at.$lte = new Date(dateFilter.endDate);
+        // Set the end date to the end of the day (23:59:59.999)
+        const endDate = new Date(dateFilter.endDate);
+        endDate.setHours(23, 59, 59, 999);
+        filter.created_at.$lte = endDate;
       }
     }
 
@@ -501,7 +504,8 @@ export class GitHubWebhookService {
           ...dateQuery,
           state: 'closed',
           merged: true,
-          $expr: { $eq: ['$user', '$merged_by'] },
+          user: { $exists: true },
+          merged_by: { $exists: true },
         },
       },
       {
@@ -527,6 +531,13 @@ export class GitHubWebhookService {
         $unwind: '$merged_by',
       },
       {
+        $match: {
+          $expr: {
+            $eq: ['$user.githubId', '$merged_by.githubId'],
+          },
+        },
+      },
+      {
         $group: {
           _id: '$user._id',
           user: { $first: '$user' },
@@ -548,41 +559,12 @@ export class GitHubWebhookService {
       },
     ]);
 
-    const totalSelfMergedPRs = await this.pullRequestModel.countDocuments({
-      ...dateQuery,
-      state: 'closed',
-      merged: true,
-      $expr: { $eq: ['$user', '$merged_by'] },
-    });
-
-    const repositoryStats = await this.pullRequestModel.aggregate([
-      {
-        $match: {
-          ...dateQuery,
-          state: 'closed',
-          merged: true,
-          $expr: { $eq: ['$user', '$merged_by'] },
-        },
-      },
-      {
-        $group: {
-          _id: '$repository.full_name',
-          repository: { $first: '$repository' },
-          totalSelfMerges: { $sum: 1 },
-        },
-      },
-      {
-        $sort: { totalSelfMerges: -1 },
-      },
-    ]);
-
     return {
-      summary: {
-        totalSelfMergedPRs,
-        uniqueUsers: selfMergedPRs.length,
-      },
-      userStats: selfMergedPRs,
-      repositoryStats,
+      totalSelfMergedPRs: selfMergedPRs.reduce(
+        (acc, curr) => acc + curr.totalSelfMerges,
+        0,
+      ),
+      users: selfMergedPRs,
     };
   }
 }
