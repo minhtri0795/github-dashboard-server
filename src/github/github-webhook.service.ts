@@ -69,11 +69,21 @@ export class GitHubWebhookService {
 
     // First, handle the user
     const user = await this.userService.findOrCreateUser(pr.user);
+    console.log('PR Creator:', {
+      githubId: pr.user.id,
+      mongoId: user._id,
+      login: pr.user.login,
+    });
 
     // Handle merged_by user if PR is merged
     let merged_by = null;
     if (pr.merged && pr.merged_by) {
       merged_by = await this.userService.findOrCreateUser(pr.merged_by);
+      console.log('PR Merger:', {
+        githubId: pr.merged_by.id,
+        mongoId: merged_by._id,
+        login: pr.merged_by.login,
+      });
     }
 
     const pullRequestData = {
@@ -497,6 +507,28 @@ export class GitHubWebhookService {
 
   async getSelfMergedPRs(dateFilter: DateFilterDto) {
     const dateQuery = this.getDateFilter(dateFilter);
+    console.log('Date Query:', dateQuery);
+
+    // First get all PRs that match our basic criteria
+    const initialMatch = await this.pullRequestModel
+      .find({
+        ...dateQuery,
+        state: 'closed',
+        merged: true,
+      })
+      .populate(['user', 'merged_by']);
+
+    console.log('Initial Match Count:', initialMatch.length);
+    console.log(
+      'Initial PRs:',
+      initialMatch.map((pr) => ({
+        prNumber: pr.prNumber,
+        user: pr.user?.githubId,
+        merged_by: pr.merged_by?.githubId,
+        created_at: pr.created_at,
+        merged_at: pr.merged_at,
+      })),
+    );
 
     const selfMergedPRs = await this.pullRequestModel.aggregate([
       {
@@ -504,8 +536,6 @@ export class GitHubWebhookService {
           ...dateQuery,
           state: 'closed',
           merged: true,
-          user: { $exists: true },
-          merged_by: { $exists: true },
         },
       },
       {
@@ -522,6 +552,12 @@ export class GitHubWebhookService {
           localField: 'merged_by',
           foreignField: '_id',
           as: 'merged_by',
+        },
+      },
+      {
+        $match: {
+          'user.0': { $exists: true },
+          'merged_by.0': { $exists: true },
         },
       },
       {
@@ -558,6 +594,8 @@ export class GitHubWebhookService {
         $sort: { totalSelfMerges: -1 },
       },
     ]);
+
+    console.log('Self Merged PRs:', JSON.stringify(selfMergedPRs, null, 2));
 
     return {
       totalSelfMergedPRs: selfMergedPRs.reduce(
