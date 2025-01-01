@@ -208,25 +208,89 @@ export class GitHubWebhookService {
       .sort({ created_at: -1 });
   }
 
-  private getDateFilter(dateFilter: DateFilterDto) {
-    const filter: any = {};
+  private getDateFilter(dateFilter?: DateFilterDto) {
+    if (!dateFilter?.startDate && !dateFilter?.endDate) {
+      // Set default date range: last 7 days
+      const endDate = new Date(); // today
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 7); // 7 days ago
 
-    if (dateFilter.startDate || dateFilter.endDate) {
-      filter.created_at = {};
-
-      if (dateFilter.startDate) {
-        filter.created_at.$gte = new Date(dateFilter.startDate);
-      }
-
-      if (dateFilter.endDate) {
-        // Set the end date to the end of the day (23:59:59.999)
-        const endDate = new Date(dateFilter.endDate);
-        endDate.setHours(23, 59, 59, 999);
-        filter.created_at.$lte = endDate;
-      }
+      return {
+        $or: [
+          {
+            created_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+          {
+            closed_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+          {
+            merged_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+        ],
+      };
     }
 
-    return filter;
+    // If dates are provided, use them
+    const startDate = dateFilter?.startDate
+      ? new Date(dateFilter.startDate)
+      : null;
+    const endDate = dateFilter?.endDate ? new Date(dateFilter.endDate) : null;
+
+    if (startDate && endDate) {
+      return {
+        $or: [
+          {
+            created_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+          {
+            closed_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+          {
+            merged_at: {
+              $gte: startDate,
+              $lte: new Date(endDate.setHours(23, 59, 59, 999)),
+            },
+          },
+        ],
+      };
+    }
+
+    if (startDate) {
+      return {
+        $or: [
+          { created_at: { $gte: startDate } },
+          { closed_at: { $gte: startDate } },
+          { merged_at: { $gte: startDate } },
+        ],
+      };
+    }
+
+    if (endDate) {
+      return {
+        $or: [
+          { created_at: { $lte: new Date(endDate.setHours(23, 59, 59, 999)) } },
+          { closed_at: { $lte: new Date(endDate.setHours(23, 59, 59, 999)) } },
+          { merged_at: { $lte: new Date(endDate.setHours(23, 59, 59, 999)) } },
+        ],
+      };
+    }
+
+    return {};
   }
 
   async getOpenPRs(dateFilter: DateFilterDto) {
@@ -299,11 +363,12 @@ export class GitHubWebhookService {
             $push: {
               prNumber: '$prNumber',
               title: '$title',
+              html_url: '$html_url',
+              repository: '$repository',
               created_at: '$created_at',
               closed_at: '$closed_at',
               merged: '$merged',
               user: '$user',
-              html_url: '$html_url',
               head: '$head',
               base: '$base',
             },
@@ -332,50 +397,160 @@ export class GitHubWebhookService {
     };
   }
 
-  async getPRStatistics() {
-    const [totalPRs, totalClosedPRs, totalMergedPRs, totalOpenPRs] =
-      await Promise.all([
-        this.pullRequestModel.countDocuments(),
-        this.pullRequestModel.countDocuments({ state: 'closed' }),
-        this.pullRequestModel.countDocuments({ merged: true }),
-        this.pullRequestModel.countDocuments({ state: 'open' }),
-      ]);
+  async getPRStatistics(dateFilter?: DateFilterDto) {
+    // If no dateFilter provided, set default to last 7 days
+    if (!dateFilter?.startDate && !dateFilter?.endDate) {
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 7);
+      dateFilter = {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+      };
+    }
 
-    const prsByAuthor = await this.pullRequestModel.aggregate([
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'user',
-          foreignField: '_id',
-          as: 'userInfo',
-        },
+    const dateQuery = this.getDateFilter(dateFilter);
+    // Extract date range from query for aggregation
+    const dateRange = (dateQuery.$or?.[0] as any)?.created_at || {};
+    const startDate = (dateRange.$gte as Date) || new Date(0); // Default to epoch if no start date
+    const endDate = (dateRange.$lte as Date) || new Date(); // Default to now if no end date
+
+    // Count PRs created in date range (regardless of current state)
+    const createdInRange = await this.pullRequestModel.countDocuments({
+      created_at: {
+        $gte: startDate,
+        $lte: endDate,
       },
-      {
-        $unwind: '$userInfo',
+    });
+
+    // Count currently open PRs
+    const openPRs = await this.pullRequestModel.countDocuments({
+      state: 'open',
+      created_at: {
+        $gte: startDate,
+        $lte: endDate,
       },
+    });
+
+    // Count PRs closed in range
+    const closedInRange = await this.pullRequestModel.countDocuments({
+      closed_at: {
+        $gte: startDate,
+        $lte: endDate,
+      },
+    });
+
+    // Count PRs merged in range
+    const mergedInRange = await this.pullRequestModel.countDocuments({
+      merged: true,
+      merged_at: {
+        $gte: startDate,
+        $lte: endDate,
+      },
+    });
+
+    // Get detailed PR activity by day
+    const prActivity = await this.pullRequestModel.aggregate([
       {
-        $group: {
-          _id: '$user',
-          user: { $first: '$userInfo' },
-          totalPRs: { $sum: 1 },
-          mergedPRs: {
-            $sum: { $cond: [{ $eq: ['$merged', true] }, 1, 0] },
-          },
-          closedPRs: {
-            $sum: { $cond: [{ $eq: ['$state', 'closed'] }, 1, 0] },
-          },
+        $facet: {
+          createdByDay: [
+            {
+              $match: {
+                created_at: {
+                  $gte: startDate,
+                  $lte: endDate,
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$created_at' },
+                },
+                count: { $sum: 1 },
+                prs: {
+                  $push: {
+                    prNumber: '$prNumber',
+                    title: '$title',
+                    html_url: '$html_url',
+                    repository: '$repository',
+                  },
+                },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+          closedByDay: [
+            {
+              $match: {
+                closed_at: {
+                  $gte: startDate,
+                  $lte: endDate,
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$closed_at' },
+                },
+                count: { $sum: 1 },
+                prs: {
+                  $push: {
+                    prNumber: '$prNumber',
+                    title: '$title',
+                    html_url: '$html_url',
+                    repository: '$repository',
+                  },
+                },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+          mergedByDay: [
+            {
+              $match: {
+                merged: true,
+                merged_at: {
+                  $gte: startDate,
+                  $lte: endDate,
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$merged_at' },
+                },
+                count: { $sum: 1 },
+                prs: {
+                  $push: {
+                    prNumber: '$prNumber',
+                    title: '$title',
+                    html_url: '$html_url',
+                    repository: '$repository',
+                  },
+                },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
         },
       },
     ]);
 
     return {
       summary: {
-        totalPRs,
-        totalClosedPRs,
-        totalMergedPRs,
-        totalOpenPRs,
+        createdInRange,
+        openPRs,
+        closedInRange,
+        mergedInRange,
+        dateRange: {
+          startDate,
+          endDate,
+        },
       },
-      prsByAuthor,
+      activity: prActivity[0],
     };
   }
 
