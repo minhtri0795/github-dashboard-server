@@ -130,7 +130,7 @@ export class GitHubWebhookService {
 
     if (action === 'opened') {
       // Send Discord notification for new PR
-      // await this.discordService.sendPROpenedNotification(payload);
+      await this.discordService.sendPROpenedNotification(payload);
       return await this.pullRequestModel.create(pullRequestData);
     } else if (action === 'closed') {
       // First check if PR exists
@@ -144,7 +144,7 @@ export class GitHubWebhookService {
       }
 
       // Send Discord notification for closed PR if it was merged
-      // await this.discordService.sendPRClosedNotification(payload);
+      await this.discordService.sendPRClosedNotification(payload);
 
       // Update existing PR
       return await this.pullRequestModel.findOneAndUpdate(
