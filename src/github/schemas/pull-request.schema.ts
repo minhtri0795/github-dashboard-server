@@ -49,6 +49,9 @@ export class PullRequest extends Document {
   @Prop()
   closed_at?: Date;
 
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  merged_by?: User;
+
   @Prop()
   merged_at?: Date;
 

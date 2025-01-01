@@ -523,8 +523,20 @@ export class GitHubWebhookService {
       'Initial PRs:',
       initialMatch.map((pr) => ({
         prNumber: pr.prNumber,
-        user: pr.user?.githubId,
-        merged_by: pr.merged_by?.githubId,
+        user:
+          pr.user && typeof pr.user === 'object'
+            ? {
+                githubId: pr.user.githubId,
+                login: pr.user.login,
+              }
+            : pr.user,
+        merged_by:
+          pr.merged_by && typeof pr.merged_by === 'object'
+            ? {
+                githubId: pr.merged_by.githubId,
+                login: pr.merged_by.login,
+              }
+            : pr.merged_by,
         created_at: pr.created_at,
         merged_at: pr.merged_at,
       })),
