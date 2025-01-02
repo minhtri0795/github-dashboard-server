@@ -369,6 +369,7 @@ export class GitHubWebhookService {
               closed_at: '$closed_at',
               merged: '$merged',
               user: '$user',
+              merged_by: '$merged_by',
               head: '$head',
               base: '$base',
             },
@@ -380,7 +381,88 @@ export class GitHubWebhookService {
           from: 'users',
           localField: 'prs.user',
           foreignField: '_id',
-          as: 'users',
+          as: 'creators',
+        },
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'prs.merged_by',
+          foreignField: '_id',
+          as: 'closers',
+        },
+      },
+      {
+        $addFields: {
+          prs: {
+            $map: {
+              input: '$prs',
+              as: 'pr',
+              in: {
+                $mergeObjects: [
+                  '$$pr',
+                  {
+                    creator: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: '$creators',
+                            as: 'creator',
+                            cond: {
+                              $eq: ['$$creator._id', '$$pr.user'],
+                            },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                    closer: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: '$closers',
+                            as: 'closer',
+                            cond: {
+                              $eq: ['$$closer._id', '$$pr.merged_by'],
+                            },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 1,
+          totalClosedPRs: 1,
+          mergedPRs: 1,
+          prs: {
+            prNumber: 1,
+            title: 1,
+            html_url: 1,
+            repository: 1,
+            created_at: 1,
+            closed_at: 1,
+            merged: 1,
+            head: 1,
+            base: 1,
+            creator: {
+              _id: 1,
+              login: 1,
+              avatar_url: 1,
+            },
+            closer: {
+              _id: 1,
+              login: 1,
+              avatar_url: 1,
+            },
+          },
         },
       },
       {

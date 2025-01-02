@@ -1,10 +1,14 @@
-import { Controller, Post, Body, Get, Query } from '@nestjs/common';
+import { Controller, Post, Body, Get, Query, Param } from '@nestjs/common';
 import { GitHubWebhookService } from './github-webhook.service';
+import { UserService } from './user.service';
 import { DateFilterDto } from './dto/date-filter.dto';
 
 @Controller('webhooks/github')
 export class GitHubWebhookController {
-  constructor(private readonly githubWebhookService: GitHubWebhookService) {}
+  constructor(
+    private readonly githubWebhookService: GitHubWebhookService,
+    private readonly userService: UserService,
+  ) {}
 
   @Post()
   async handleGitHubWebhook(@Body() payload: any) {
@@ -49,5 +53,18 @@ export class GitHubWebhookController {
   @Get('self-merged-prs')
   async getSelfMergedPRs(@Query() dateFilter: DateFilterDto) {
     return await this.githubWebhookService.getSelfMergedPRs(dateFilter);
+  }
+
+  @Get('users')
+  async getAllUsers(@Query() dateFilter: DateFilterDto) {
+    return await this.userService.getAllUsers(dateFilter);
+  }
+
+  @Get('users/:login')
+  async getUserByLogin(
+    @Query() dateFilter: DateFilterDto,
+    @Param('login') login: string,
+  ) {
+    return await this.userService.getUserByLogin(login, dateFilter);
   }
 }

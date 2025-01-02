@@ -235,6 +235,47 @@ Array<{
 }>
 ```
 
+### Get All Users
+Get a list of all GitHub users in the system with their PR statistics.
+
+```
+GET /webhooks/github/users
+```
+
+#### Response
+```typescript
+Array<{
+  githubId: number;
+  login: string;
+  name: string;
+  email: string;
+  avatar_url: string;  // GitHub avatar URL
+  statistics: {
+    openPRs: number;     // Number of open pull requests
+    closedPRs: number;   // Number of closed pull requests
+    selfMergedPRs: number; // Number of PRs merged by the author themselves
+  }
+}>
+```
+
+Example response:
+```json
+[
+  {
+    "githubId": 123456,
+    "login": "user1",
+    "name": "User One",
+    "email": "user1@example.com",
+    "avatar_url": "https://avatars.githubusercontent.com/u/123456?v=4",
+    "statistics": {
+      "openPRs": 8,
+      "closedPRs": 3,
+      "selfMergedPRs": 2
+    }
+  }
+]
+```
+
 ## Error Responses
 All endpoints may return the following error responses:
 
