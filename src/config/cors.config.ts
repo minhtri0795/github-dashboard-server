@@ -5,6 +5,7 @@ const allowedOrigins = [
   'http://localhost:5173',
   'https://sd-dev.pro',
   'http://sd-dev.pro',
+  'https://git-sd-dashboard.netlify.app/',
 ];
 
 export const corsConfig: CorsOptions = {
