@@ -29,23 +29,23 @@ export class GitHubWebhookService {
       const { pull_request: pr, repository, after } = payload;
 
       // Create commit record for the new head commit
-      const author = await this.userService.findOrCreateUser(pr.user);
+      const author = await this.userService.findOrCreateUser(pr?.user);
       const commitData = {
         sha: after,
-        node_id: pr.head.node_id,
-        author: author._id,
-        message: `New commit on PR #${pr.number}: ${pr.title}`,
-        url: `${repository.url}/commits/${after}`,
-        html_url: `${repository.html_url}/commit/${after}`,
-        comments_url: `${repository.html_url}/commit/${after}/comments`,
+        node_id: pr?.head?.node_id,
+        author: author?._id,
+        message: `New commit on PR #${pr?.number}: ${pr?.title}`,
+        url: `${repository?.url}/commits/${after}`,
+        html_url: `${repository?.html_url}/commit/${after}`,
+        comments_url: `${repository?.html_url}/commit/${after}/comments`,
         repository: {
-          id: repository.id,
-          node_id: repository.node_id,
-          name: repository.name,
-          full_name: repository.full_name,
-          private: repository.private,
+          id: repository?.id,
+          node_id: repository?.node_id,
+          name: repository?.name,
+          full_name: repository?.full_name,
+          private: repository?.private,
         },
-        branch: pr.head.ref,
+        branch: pr?.head?.ref,
         added: [],
         removed: [],
         modified: [],
@@ -68,63 +68,63 @@ export class GitHubWebhookService {
     const { action, pull_request: pr, repository } = payload;
 
     // First, handle the user
-    const user = await this.userService.findOrCreateUser(pr.user);
+    const user = await this.userService.findOrCreateUser(pr?.user);
     console.log('PR Creator:', {
-      githubId: pr.user.id,
-      mongoId: user._id,
-      login: pr.user.login,
+      githubId: pr?.user?.id,
+      mongoId: user?._id,
+      login: pr?.user?.login,
     });
 
     // Handle merged_by user if PR is merged
     let merged_by = null;
-    if (pr.merged && pr.merged_by) {
+    if (pr?.merged && pr?.merged_by) {
       merged_by = await this.userService.findOrCreateUser(pr.merged_by);
       console.log('PR Merger:', {
-        githubId: pr.merged_by.id,
-        mongoId: merged_by._id,
-        login: pr.merged_by.login,
+        githubId: pr?.merged_by?.id,
+        mongoId: merged_by?._id,
+        login: pr?.merged_by?.login,
       });
     }
 
     const pullRequestData = {
-      prNumber: pr.number,
-      node_id: pr.node_id,
-      title: pr.title,
-      state: pr.state,
-      locked: pr.locked,
-      user: user._id,
+      prNumber: pr?.number,
+      node_id: pr?.node_id,
+      title: pr?.title,
+      state: pr?.state,
+      locked: pr?.locked,
+      user: user?._id,
       merged_by: merged_by?._id,
-      body: pr.body,
-      url: pr.url,
-      html_url: pr.html_url,
-      diff_url: pr.diff_url,
-      patch_url: pr.patch_url,
-      issue_url: pr.issue_url,
-      created_at: new Date(pr.created_at),
-      updated_at: new Date(pr.updated_at),
-      closed_at: pr.closed_at ? new Date(pr.closed_at) : undefined,
-      merged_at: pr.merged_at ? new Date(pr.merged_at) : undefined,
-      merge_commit_sha: pr.merge_commit_sha,
-      merged: pr.merged || false,
-      mergeable: pr.mergeable,
-      rebaseable: pr.rebaseable,
-      mergeable_state: pr.mergeable_state,
+      body: pr?.body,
+      url: pr?.url,
+      html_url: pr?.html_url,
+      diff_url: pr?.diff_url,
+      patch_url: pr?.patch_url,
+      issue_url: pr?.issue_url,
+      created_at: pr?.created_at ? new Date(pr.created_at) : undefined,
+      updated_at: pr?.updated_at ? new Date(pr.updated_at) : undefined,
+      closed_at: pr?.closed_at ? new Date(pr.closed_at) : undefined,
+      merged_at: pr?.merged_at ? new Date(pr.merged_at) : undefined,
+      merge_commit_sha: pr?.merge_commit_sha,
+      merged: pr?.merged || false,
+      mergeable: pr?.mergeable,
+      rebaseable: pr?.rebaseable,
+      mergeable_state: pr?.mergeable_state,
       head: {
-        label: pr.head.label,
-        ref: pr.head.ref,
-        sha: pr.head.sha,
+        label: pr?.head?.label,
+        ref: pr?.head?.ref,
+        sha: pr?.head?.sha,
       },
       base: {
-        label: pr.base.label,
-        ref: pr.base.ref,
-        sha: pr.base.sha,
+        label: pr?.base?.label,
+        ref: pr?.base?.ref,
+        sha: pr?.base?.sha,
       },
       repository: {
-        id: repository.id,
-        node_id: repository.node_id,
-        name: repository.name,
-        full_name: repository.full_name,
-        private: repository.private,
+        id: repository?.id,
+        node_id: repository?.node_id,
+        name: repository?.name,
+        full_name: repository?.full_name,
+        private: repository?.private,
       },
     };
 
@@ -135,10 +135,10 @@ export class GitHubWebhookService {
     } else if (action === 'closed') {
       // First check if PR exists
       const existingPR = await this.pullRequestModel.findOne({
-        prNumber: pr.number,
+        prNumber: pr?.number,
       });
       if (!existingPR) {
-        console.warn(`Received close event for non-existent PR #${pr.number}`);
+        console.warn(`Received close event for non-existent PR #${pr?.number}`);
         // Create the PR if it doesn't exist, but log a warning
         return await this.pullRequestModel.create(pullRequestData);
       }
@@ -148,7 +148,7 @@ export class GitHubWebhookService {
 
       // Update existing PR
       return await this.pullRequestModel.findOneAndUpdate(
-        { prNumber: pr.number },
+        { prNumber: pr?.number },
         pullRequestData,
         { new: true },
       );
@@ -157,40 +157,40 @@ export class GitHubWebhookService {
 
   private async handlePushEvent(payload: any) {
     const { repository, commits, ref } = payload;
-    const branch = ref.replace('refs/heads/', '');
+    const branch = ref?.replace('refs/heads/', '');
 
     const savedCommits = [];
-    for (const commit of commits) {
+    for (const commit of commits || []) {
       // Get or create user for commit author
-      const author = await this.userService.findOrCreateUser(commit.author);
+      const author = await this.userService.findOrCreateUser(commit?.author);
 
       const commitData = {
-        sha: commit.id,
-        node_id: commit.node_id,
-        author: author._id,
-        message: commit.message,
-        url: commit.url,
-        html_url: `${repository.html_url}/commit/${commit.id}`,
-        comments_url: `${repository.html_url}/commit/${commit.id}/comments`,
+        sha: commit?.id,
+        node_id: commit?.node_id,
+        author: author?._id,
+        message: commit?.message,
+        url: commit?.url,
+        html_url: `${repository?.html_url}/commit/${commit?.id}`,
+        comments_url: `${repository?.html_url}/commit/${commit?.id}/comments`,
         repository: {
-          id: repository.id,
-          node_id: repository.node_id,
-          name: repository.name,
-          full_name: repository.full_name,
-          private: repository.private,
+          id: repository?.id,
+          node_id: repository?.node_id,
+          name: repository?.name,
+          full_name: repository?.full_name,
+          private: repository?.private,
         },
         branch,
-        added: commit.added,
-        removed: commit.removed,
-        modified: commit.modified,
-        created_at: new Date(commit.timestamp),
+        added: commit?.added || [],
+        removed: commit?.removed || [],
+        modified: commit?.modified || [],
+        created_at: commit?.timestamp ? new Date(commit.timestamp) : new Date(),
         stats: {
           total:
-            commit.added.length +
-            commit.removed.length +
-            commit.modified.length,
-          additions: commit.added.length,
-          deletions: commit.removed.length,
+            (commit?.added?.length || 0) +
+            (commit?.removed?.length || 0) +
+            (commit?.modified?.length || 0),
+          additions: commit?.added?.length || 0,
+          deletions: commit?.removed?.length || 0,
         },
       };
 
