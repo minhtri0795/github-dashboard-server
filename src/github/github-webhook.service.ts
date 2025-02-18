@@ -19,49 +19,65 @@ export class GitHubWebhookService {
   ) {}
 
   async handleWebhookEvent(payload: any) {
-    // Check if it's a push event
-    if (payload.commits) {
-      return this.handlePushEvent(payload);
+    try {
+      if (!payload) {
+        throw new Error(
+          'Invalid webhook payload: payload is null or undefined',
+        );
+      }
+
+      // Check if it's a push event
+      if (payload.commits) {
+        return this.handlePushEvent(payload);
+      }
+
+      // If it's a synchronize action in PR event, handle as commit
+      if (payload.action === 'synchronize') {
+        const { pull_request: pr, repository, after } = payload;
+
+        // Create commit record for the new head commit
+        const author = await this.userService.findOrCreateUser(pr?.user);
+        const commitData = {
+          sha: after,
+          node_id: pr?.head?.node_id,
+          author: author?._id,
+          message: `New commit on PR #${pr?.number}: ${pr?.title}`,
+          url: `${repository?.url}/commits/${after}`,
+          html_url: `${repository?.html_url}/commit/${after}`,
+          comments_url: `${repository?.html_url}/commit/${after}/comments`,
+          repository: {
+            id: repository?.id,
+            node_id: repository?.node_id,
+            name: repository?.name,
+            full_name: repository?.full_name,
+            private: repository?.private,
+          },
+          branch: pr?.head?.ref,
+          added: [],
+          removed: [],
+          modified: [],
+          created_at: new Date(),
+          stats: {
+            total: 1,
+            additions: 0,
+            deletions: 0,
+          },
+        };
+
+        await this.commitModel.create(commitData);
+      }
+
+      // Handle as PR event
+      if (!payload.pull_request || !payload.repository) {
+        throw new Error(
+          'Invalid PR event payload: missing pull_request or repository',
+        );
+      }
+      return this.handlePullRequestEvent(payload);
+    } catch (error) {
+      console.error('Error handling webhook event:', error);
+      throw error;
     }
-
-    // If it's a synchronize action in PR event, handle as commit
-    if (payload.action === 'synchronize') {
-      const { pull_request: pr, repository, after } = payload;
-
-      // Create commit record for the new head commit
-      const author = await this.userService.findOrCreateUser(pr?.user);
-      const commitData = {
-        sha: after,
-        node_id: pr?.head?.node_id,
-        author: author?._id,
-        message: `New commit on PR #${pr?.number}: ${pr?.title}`,
-        url: `${repository?.url}/commits/${after}`,
-        html_url: `${repository?.html_url}/commit/${after}`,
-        comments_url: `${repository?.html_url}/commit/${after}/comments`,
-        repository: {
-          id: repository?.id,
-          node_id: repository?.node_id,
-          name: repository?.name,
-          full_name: repository?.full_name,
-          private: repository?.private,
-        },
-        branch: pr?.head?.ref,
-        added: [],
-        removed: [],
-        modified: [],
-        created_at: new Date(),
-        stats: {
-          total: 1,
-          additions: 0,
-          deletions: 0,
-        },
-      };
-
-      await this.commitModel.create(commitData);
-    }
-
-    // Handle as PR event
-    return this.handlePullRequestEvent(payload);
   }
 
   private async handlePullRequestEvent(payload: any) {
@@ -136,22 +152,39 @@ export class GitHubWebhookService {
       // First check if PR exists
       const existingPR = await this.pullRequestModel.findOne({
         prNumber: pr?.number,
+        'repository.full_name': repository?.full_name,
       });
       if (!existingPR) {
-        console.warn(`Received close event for non-existent PR #${pr?.number}`);
+        console.warn(
+          `Received ${action} event for non-existent PR #${pr?.number} in ${repository?.full_name}`,
+        );
         // Create the PR if it doesn't exist, but log a warning
         return await this.pullRequestModel.create(pullRequestData);
       }
 
       // Send Discord notification for closed PR if it was merged
-      await this.discordService.sendPRClosedNotification(payload);
+      if (action === 'closed') {
+        await this.discordService.sendPRClosedNotification(payload);
+      }
 
       // Update existing PR
-      return await this.pullRequestModel.findOneAndUpdate(
-        { prNumber: pr?.number },
+      const updatedPR = await this.pullRequestModel.findOneAndUpdate(
+        {
+          prNumber: pr?.number,
+          'repository.full_name': repository?.full_name,
+        },
         pullRequestData,
         { new: true },
       );
+
+      console.log(`PR #${pr?.number} ${action}:`, {
+        repository: repository?.full_name,
+        oldState: existingPR.state,
+        newState: updatedPR.state,
+        action,
+      });
+
+      return updatedPR;
     }
   }
 
@@ -316,6 +349,7 @@ export class GitHubWebhookService {
               html_url: '$html_url',
               head: '$head',
               base: '$base',
+              repository: '$repository', // Add repository info to each PR
             },
           },
         },
@@ -636,8 +670,13 @@ export class GitHubWebhookService {
     };
   }
 
-  async getPRsByRepository() {
+  async getPRsByRepository(dateFilter?: DateFilterDto) {
+    const dateQuery = this.getDateFilter(dateFilter);
+
     return await this.pullRequestModel.aggregate([
+      {
+        $match: dateQuery,
+      },
       {
         $group: {
           _id: '$repository.full_name',
@@ -873,5 +912,48 @@ export class GitHubWebhookService {
       ),
       users: selfMergedPRs,
     };
+  }
+
+  async cleanupDuplicatePRs() {
+    const duplicates = await this.pullRequestModel.aggregate([
+      {
+        $group: {
+          _id: {
+            prNumber: '$prNumber',
+            repository: '$repository.full_name',
+          },
+          count: { $sum: 1 },
+          docs: { $push: '$$ROOT' },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+    ]);
+
+    let cleanedCount = 0;
+    for (const duplicate of duplicates) {
+      const docs = duplicate.docs;
+      // Sort by updated_at descending to keep the most recent one
+      docs.sort(
+        (a, b) =>
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+      );
+
+      // Keep the most recent one, delete others
+      const [keep, ...remove] = docs;
+      const removeIds = remove.map((doc) => doc._id);
+
+      await this.pullRequestModel.deleteMany({ _id: { $in: removeIds } });
+      cleanedCount += removeIds.length;
+
+      console.log(
+        `Cleaned up ${removeIds.length} duplicate(s) for PR #${keep.prNumber} in ${keep.repository.full_name}`,
+      );
+    }
+
+    return cleanedCount;
   }
 }

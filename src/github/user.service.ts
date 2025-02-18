@@ -15,12 +15,25 @@ export class UserService {
   ) {}
 
   private getDateRange(dateFilter: DateFilterDto) {
-    const endDate = dateFilter.endDate
-      ? new Date(dateFilter.endDate)
-      : new Date();
-    const startDate = dateFilter.startDate
-      ? new Date(dateFilter.startDate)
-      : new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+    let endDate: Date;
+    let startDate: Date;
+
+    if (dateFilter?.endDate) {
+      endDate = new Date(dateFilter.endDate);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      endDate = new Date();
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    if (dateFilter?.startDate) {
+      startDate = new Date(dateFilter.startDate);
+      startDate.setHours(0, 0, 0, 0);
+    } else {
+      startDate = new Date(endDate);
+      startDate.setDate(startDate.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
+    }
 
     return { startDate, endDate };
   }
@@ -28,10 +41,29 @@ export class UserService {
   private async getUserStats(user: any, startDate: Date, endDate: Date) {
     const query = {
       user: user._id,
-      created_at: {
-        $gte: startDate,
-        $lte: endDate,
-      },
+      $or: [
+        // PRs created in range
+        {
+          created_at: {
+            $gte: startDate,
+            $lte: endDate,
+          },
+        },
+        // PRs closed in range
+        {
+          closed_at: {
+            $gte: startDate,
+            $lte: endDate,
+          },
+        },
+        // PRs merged in range
+        {
+          merged_at: {
+            $gte: startDate,
+            $lte: endDate,
+          },
+        },
+      ],
     };
 
     console.log(
@@ -39,6 +71,8 @@ export class UserService {
       user.login,
       'with id:',
       user._id,
+      'githubId:',
+      user.githubId,
       'in date range:',
       { startDate, endDate },
     );
@@ -54,14 +88,16 @@ export class UserService {
       console.log('Sample PR:', JSON.stringify(userPRs[0], null, 2));
     }
 
-    // Count different PR states
+    // Count different PR states within the date range
     const openPRs = userPRs.filter((pr) => pr.state === 'open').length;
+
     const closedPRs = userPRs.filter((pr) => pr.state === 'closed').length;
+
     const selfMergedPRs = userPRs.filter(
       (pr) =>
         pr.state === 'closed' &&
         pr.merged === true &&
-        pr.merged_by?._id.toString() === user._id.toString(),
+        pr.merged_by?.githubId === user.githubId,
     ).length;
 
     return {

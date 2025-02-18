@@ -104,3 +104,9 @@ export class PullRequest extends Document {
 }
 
 export const PullRequestSchema = SchemaFactory.createForClass(PullRequest);
+
+// Add compound index for uniqueness
+PullRequestSchema.index(
+  { 'repository.full_name': 1, prNumber: 1 },
+  { unique: true },
+);

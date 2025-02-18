@@ -21,13 +21,13 @@ export class GitHubWebhookController {
   }
 
   @Get('statistics')
-  async getPRStatistics() {
-    return await this.githubWebhookService.getPRStatistics();
+  async getPRStatistics(@Query() dateFilter: DateFilterDto) {
+    return await this.githubWebhookService.getPRStatistics(dateFilter);
   }
 
   @Get('repository-stats')
-  async getPRsByRepository() {
-    return await this.githubWebhookService.getPRsByRepository();
+  async getPRsByRepository(@Query() dateFilter: DateFilterDto) {
+    return await this.githubWebhookService.getPRsByRepository(dateFilter);
   }
 
   @Get('open-prs')
@@ -66,5 +66,14 @@ export class GitHubWebhookController {
     @Param('login') login: string,
   ) {
     return await this.userService.getUserByLogin(login, dateFilter);
+  }
+
+  @Post('cleanup-duplicates')
+  async cleanupDuplicatePRs() {
+    const cleanedCount = await this.githubWebhookService.cleanupDuplicatePRs();
+    return {
+      message: `Cleaned up ${cleanedCount} duplicate PR(s)`,
+      cleanedCount,
+    };
   }
 }
