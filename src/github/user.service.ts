@@ -129,6 +129,7 @@ export class UserService {
       name: userData.name,
       email: userData.email,
       avatar_url: userData.avatar_url,
+      type: 'User',
     });
   }
 

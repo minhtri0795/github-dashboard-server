@@ -51,7 +51,7 @@ export class User extends Document {
   @Prop()
   received_events_url?: string;
 
-  @Prop({ required: true })
+  @Prop()
   type: string;
 
   @Prop()
