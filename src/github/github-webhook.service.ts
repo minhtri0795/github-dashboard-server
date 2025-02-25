@@ -326,6 +326,30 @@ export class GitHubWebhookService {
     return {};
   }
 
+  private getDateRange(dateFilter: DateFilterDto) {
+    let endDate: Date;
+    let startDate: Date;
+
+    if (dateFilter?.endDate) {
+      endDate = new Date(dateFilter.endDate);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      endDate = new Date();
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    if (dateFilter?.startDate) {
+      startDate = new Date(dateFilter.startDate);
+      startDate.setHours(0, 0, 0, 0);
+    } else {
+      startDate = new Date(endDate);
+      startDate.setDate(startDate.getDate() - 7);
+      startDate.setHours(0, 0, 0, 0);
+    }
+
+    return { startDate, endDate };
+  }
+
   async getOpenPRs(dateFilter: DateFilterDto) {
     const dateQuery = this.getDateFilter(dateFilter);
 
@@ -525,31 +549,31 @@ export class GitHubWebhookService {
       };
     }
 
-    const dateQuery = this.getDateFilter(dateFilter);
-    // Extract date range from query for aggregation
-    const dateRange = (dateQuery.$or?.[0] as any)?.created_at || {};
-    const startDate = (dateRange.$gte as Date) || new Date(0); // Default to epoch if no start date
-    const endDate = (dateRange.$lte as Date) || new Date(); // Default to now if no end date
+    const { startDate, endDate } = this.getDateRange(dateFilter);
 
     // Count PRs created in date range (regardless of current state)
     const createdInRange = await this.pullRequestModel.countDocuments({
-      created_at: {
-        $gte: startDate,
-        $lte: endDate,
-      },
+      $or: [
+        { created_at: { $gte: startDate, $lte: endDate } },
+        { closed_at: { $gte: startDate, $lte: endDate } },
+        { merged_at: { $gte: startDate, $lte: endDate } },
+      ],
     });
 
-    // Count currently open PRs
+    // Count currently open PRs that were either:
+    // - Created in range
+    // - Had activity in range
     const openPRs = await this.pullRequestModel.countDocuments({
       state: 'open',
-      created_at: {
-        $gte: startDate,
-        $lte: endDate,
-      },
+      $or: [
+        { created_at: { $gte: startDate, $lte: endDate } },
+        { updated_at: { $gte: startDate, $lte: endDate } },
+      ],
     });
 
     // Count PRs closed in range
     const closedInRange = await this.pullRequestModel.countDocuments({
+      state: 'closed',
       closed_at: {
         $gte: startDate,
         $lte: endDate,
@@ -572,10 +596,11 @@ export class GitHubWebhookService {
           createdByDay: [
             {
               $match: {
-                created_at: {
-                  $gte: startDate,
-                  $lte: endDate,
-                },
+                $or: [
+                  { created_at: { $gte: startDate, $lte: endDate } },
+                  { closed_at: { $gte: startDate, $lte: endDate } },
+                  { merged_at: { $gte: startDate, $lte: endDate } },
+                ],
               },
             },
             {
@@ -599,6 +624,7 @@ export class GitHubWebhookService {
           closedByDay: [
             {
               $match: {
+                state: 'closed',
                 closed_at: {
                   $gte: startDate,
                   $lte: endDate,
