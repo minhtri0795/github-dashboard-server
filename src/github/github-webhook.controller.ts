@@ -56,16 +56,16 @@ export class GitHubWebhookController {
   }
 
   @Get('users')
-  async getAllUsers(@Query() dateFilter: DateFilterDto) {
-    return await this.userService.getAllUsers(dateFilter);
+  async getUsers(@Query() dateFilter: DateFilterDto) {
+    return this.userService.getUsers(dateFilter);
   }
 
-  @Get('users/:login')
-  async getUserByLogin(
+  @Get('users/:githubId')
+  async getUserDetails(
+    @Param('githubId') githubId: number,
     @Query() dateFilter: DateFilterDto,
-    @Param('login') login: string,
   ) {
-    return await this.userService.getUserByLogin(login, dateFilter);
+    return this.userService.getUserDetails(githubId, dateFilter);
   }
 
   @Post('cleanup-duplicates')
