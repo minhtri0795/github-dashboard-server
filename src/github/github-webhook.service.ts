@@ -58,7 +58,8 @@ export class GitHubWebhookService {
           modified: [],
           created_at: new Date(),
           stats: {
-            total: 1,
+            // Use the total commits count from PR payload instead of hardcoding 1
+            total: pr?.commits || 1,
             additions: 0,
             deletions: 0,
           },
@@ -90,6 +91,36 @@ export class GitHubWebhookService {
       mongoId: user?._id,
       login: pr?.user?.login,
     });
+    // If it's a new PR (opened action), create commit records for initial commits
+    if (action === 'opened' && pr?.commits > 0) {
+      const commitData = {
+        sha: pr?.head?.sha,
+        node_id: pr?.head?.node_id,
+        author: user?._id,
+        message: `Initial commits on PR #${pr?.number}: ${pr?.title}`,
+        url: `${repository?.url}/commits/${pr?.head?.sha}`,
+        html_url: `${repository?.html_url}/commit/${pr?.head?.sha}`,
+        comments_url: `${repository?.html_url}/commit/${pr?.head?.sha}/comments`,
+        repository: {
+          id: repository?.id,
+          node_id: repository?.node_id,
+          name: repository?.name,
+          full_name: repository?.full_name,
+          private: repository?.private,
+        },
+        branch: pr?.head?.ref,
+        added: [],
+        removed: [],
+        modified: [],
+        created_at: new Date(),
+        stats: {
+          total: pr?.commits || 0,
+          additions: pr?.additions || 0,
+          deletions: pr?.deletions || 0,
+        },
+      };
+      await this.commitModel.create(commitData);
+    }
 
     // Handle merged_by user if PR is merged
     let merged_by = null;
