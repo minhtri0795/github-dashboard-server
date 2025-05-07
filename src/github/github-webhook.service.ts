@@ -6,6 +6,8 @@ import { Commit } from './schemas/commit.schema';
 import { UserService } from './user.service';
 import { DateFilterDto } from './dto/date-filter.dto';
 import { DiscordService } from './discord.service';
+import { ConfigService } from '@nestjs/config';
+import axios from 'axios';
 
 @Injectable()
 export class GitHubWebhookService {
@@ -16,6 +18,7 @@ export class GitHubWebhookService {
     private commitModel: Model<Commit>,
     private userService: UserService,
     private discordService: DiscordService,
+    private configService: ConfigService,
   ) {}
 
   async handleWebhookEvent(payload: any) {
@@ -93,33 +96,49 @@ export class GitHubWebhookService {
     });
     // If it's a new PR (opened action), create commit records for initial commits
     if (action === 'opened' && pr?.commits > 0) {
-      const commitData = {
-        sha: pr?.head?.sha,
-        node_id: pr?.head?.node_id,
-        author: user?._id,
-        message: `Initial commits on PR #${pr?.number}: ${pr?.title}`,
-        url: `${repository?.url}/commits/${pr?.head?.sha}`,
-        html_url: `${repository?.html_url}/commit/${pr?.head?.sha}`,
-        comments_url: `${repository?.html_url}/commit/${pr?.head?.sha}/comments`,
-        repository: {
-          id: repository?.id,
-          node_id: repository?.node_id,
-          name: repository?.name,
-          full_name: repository?.full_name,
-          private: repository?.private,
-        },
-        branch: pr?.head?.ref,
-        added: [],
-        removed: [],
-        modified: [],
-        created_at: new Date(),
-        stats: {
-          total: pr?.commits || 0,
-          additions: pr?.additions || 0,
-          deletions: pr?.deletions || 0,
-        },
-      };
-      await this.commitModel.create(commitData);
+      const commitCount = pr?.commits || 0;
+      console.log(
+        `Creating ${commitCount} commit records for PR #${pr?.number}`,
+      );
+
+      // Create individual commit records for each commit in the PR
+      for (let i = 0; i < commitCount; i++) {
+        const commitData = {
+          sha: i === commitCount - 1 ? pr?.head?.sha : `${pr?.head?.sha}-${i}`, // Use actual SHA for last commit
+          node_id:
+            i === commitCount - 1
+              ? pr?.head?.node_id
+              : `${pr?.head?.node_id}-${i}`,
+          author: user?._id,
+          message:
+            i === commitCount - 1
+              ? `Commit #${i + 1} (Head) on PR #${pr?.number}: ${pr?.title}`
+              : `Commit #${i + 1} on PR #${pr?.number}: ${pr?.title}`,
+          url: `${repository?.url}/commits/${pr?.head?.sha}`,
+          html_url: `${repository?.html_url}/commit/${pr?.head?.sha}`,
+          comments_url: `${repository?.html_url}/commit/${pr?.head?.sha}/comments`,
+          repository: {
+            id: repository?.id,
+            node_id: repository?.node_id,
+            name: repository?.name,
+            full_name: repository?.full_name,
+            private: repository?.private,
+          },
+          branch: pr?.head?.ref,
+          added: [],
+          removed: [],
+          modified: [],
+          created_at: new Date(
+            new Date().getTime() - (commitCount - i - 1) * 60000,
+          ), // Stagger timestamps
+          stats: {
+            total: 1, // Each record represents 1 commit
+            additions: Math.floor((pr?.additions || 0) / commitCount), // Distribute additions
+            deletions: Math.floor((pr?.deletions || 0) / commitCount), // Distribute deletions
+          },
+        };
+        await this.commitModel.create(commitData);
+      }
     }
 
     // Handle merged_by user if PR is merged
@@ -1012,5 +1031,433 @@ export class GitHubWebhookService {
     }
 
     return cleanedCount;
+  }
+
+  /**
+   * Updates commit counts for existing PRs by fetching data from GitHub API
+   * @param repository Optional repository name in format 'owner/repo' to limit the update
+   * @returns Summary of the update operation
+   */
+  /**
+   * Updates commit counts by fetching data from GitHub API
+   * @param repository Optional repository name in format 'owner/repo' to limit the update
+   * @returns Summary of the update operation
+   */
+  async updateCommitCountsFromGitHub(repository?: string) {
+    const githubToken = this.configService.get('GITHUB_TOKEN');
+    if (!githubToken) {
+      throw new Error('GitHub token is required for this operation');
+    }
+
+    // Query to find PRs to update
+    const query: any = {};
+    if (repository) {
+      query['repository.full_name'] = repository;
+    }
+
+    const pullRequests = await this.pullRequestModel.find(query);
+    console.log(
+      `Found ${pullRequests.length} PRs to check for commit count updates`,
+    );
+
+    let updatedCount = 0;
+    let newCommitsCreated = 0;
+    let errors = 0;
+
+    for (const pr of pullRequests) {
+      try {
+        // Use GitHub API to fetch PR details including commit count
+        const apiUrl = `https://api.github.com/repos/${pr.repository.full_name}/pulls/${pr.prNumber}`;
+
+        // Use axios for HTTP requests
+        const response = await axios.get(apiUrl, {
+          headers: {
+            Authorization: `token ${githubToken}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        });
+
+        const prData = response.data;
+        const commitCount = prData.commits || 0;
+
+        // Find existing commit records for this PR
+        const existingCommits = await this.commitModel.find({
+          'repository.full_name': pr.repository.full_name,
+          branch: prData.head.ref,
+        });
+
+        // Calculate total commits from existing records
+        const existingCommitCount = existingCommits.reduce(
+          (total, commit) => total + (commit.stats?.total || 0),
+          0,
+        );
+
+        // If no commits found or the commit count doesn't match, create a new commit record
+        if (
+          existingCommits.length === 0 ||
+          existingCommitCount !== commitCount
+        ) {
+          // Get the author
+          const author = await this.userService.findOrCreateUser(prData.user);
+
+          // Create a new commit record with the correct count
+          const commitData = {
+            sha: prData.head.sha,
+            node_id: prData.head.node_id,
+            author: author?._id,
+            message: `Updated commit count for PR #${pr.prNumber}: ${pr.title}`,
+            url: `https://api.github.com/repos/${pr.repository.full_name}/commits/${prData.head.sha}`,
+            html_url: `https://github.com/${pr.repository.full_name}/commit/${prData.head.sha}`,
+            comments_url: `https://github.com/${pr.repository.full_name}/commit/${prData.head.sha}/comments`,
+            repository: {
+              id: pr.repository.id,
+              node_id: pr.repository.node_id,
+              name: pr.repository.name,
+              full_name: pr.repository.full_name,
+              private: pr.repository.private,
+            },
+            branch: prData.head.ref,
+            added: [],
+            removed: [],
+            modified: [],
+            created_at: new Date(),
+            stats: {
+              total: commitCount,
+              additions: prData.additions || 0,
+              deletions: prData.deletions || 0,
+            },
+          };
+
+          await this.commitModel.create(commitData);
+          newCommitsCreated++;
+          updatedCount++;
+          console.log(
+            `Updated commit count for PR #${pr.prNumber} in ${pr.repository.full_name} to ${commitCount} (was ${existingCommitCount})`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          `Error updating commit count for PR #${pr.prNumber} in ${pr.repository.full_name}:`,
+          error.message,
+        );
+        errors++;
+      }
+    }
+
+    return {
+      totalPRs: pullRequests.length,
+      updatedCount,
+      newCommitsCreated,
+      errors,
+    };
+  }
+
+  /**
+   * Updates commit counts based on existing data in MongoDB
+   * This method analyzes PRs and commits in the database and updates commit stats
+   * without making external API calls to GitHub
+   * @param repository Optional repository name in format 'owner/repo' to limit the update
+   * @returns Summary of the update operation
+   */
+  /**
+   * Deletes all commits from the database
+   * This can be used to clean up before regenerating commits with updateCommitCounts
+   * @param repository Optional repository name in format 'owner/repo' to limit the deletion
+   * @returns Summary of the deletion operation
+   */
+  async deleteAllCommits(repository?: string) {
+    // Prepare query to filter commits if repository is specified
+    const query: any = {};
+    if (repository) {
+      query['repository.full_name'] = repository;
+    }
+
+    // Count commits before deletion for reporting
+    const countBefore = await this.commitModel.countDocuments(query);
+    console.log(`Found ${countBefore} commits to delete`);
+
+    // Delete the commits
+    const result = await this.commitModel.deleteMany(query);
+
+    console.log(`Deleted ${result.deletedCount} commits`);
+
+    return {
+      deletedCount: result.deletedCount,
+      repository: repository || 'all',
+    };
+  }
+
+  /**
+   * Fetches commit data from GitHub API for PRs and regenerates commit records
+   * This is useful when commit data is missing or has been deleted
+   * @param repository Optional repository name in format 'owner/repo' to limit the operation
+   * @returns Summary of the operation
+   */
+  async fetchAndRegenerateCommits(repository?: string) {
+    // Prepare query to filter PRs if repository is specified
+    const query: any = {};
+    if (repository) {
+      query['repository.full_name'] = repository;
+    }
+
+    // Get all PRs matching the query
+    const pullRequests = await this.pullRequestModel.find(query);
+    console.log(`Found ${pullRequests.length} PRs to fetch commits for`);
+
+    let totalCommitsCreated = 0;
+    let failedPRs = 0;
+    const errors = [];
+
+    // Get GitHub token from config
+    const githubToken = this.configService.get<string>('GITHUB_TOKEN');
+    if (!githubToken) {
+      throw new Error(
+        'GitHub token is not configured. Set GITHUB_TOKEN in your environment variables.',
+      );
+    }
+
+    // Process each PR
+    for (const pr of pullRequests) {
+      try {
+        // Skip PRs that don't have a repository or are missing key data
+        if (!pr.repository || !pr.repository.full_name || !pr.prNumber) {
+          console.warn(`Skipping PR with incomplete data: ${pr._id}`);
+          continue;
+        }
+
+        const repoFullName = pr.repository.full_name;
+        const prNumber = pr.prNumber;
+
+        console.log(`Fetching commits for PR #${prNumber} in ${repoFullName}`);
+
+        // Fetch commits for this PR from GitHub API
+        const commitsUrl = `https://api.github.com/repos/${repoFullName}/pulls/${prNumber}/commits`;
+        const response = await axios.get(commitsUrl, {
+          headers: {
+            Authorization: `token ${githubToken}`,
+            Accept: 'application/vnd.github.v3+json',
+          },
+        });
+
+        const commits = response.data;
+        console.log(`Found ${commits.length} commits for PR #${prNumber}`);
+
+        // Process each commit
+        for (const commit of commits) {
+          // Find or create the author user
+          const author = await this.userService.findOrCreateUser(
+            commit.author || commit.committer,
+          );
+
+          // Get the branch name from PR head ref
+          const branchName = pr.head?.ref || 'unknown';
+
+          // Fetch detailed commit data to get stats
+          const commitDetailUrl = `https://api.github.com/repos/${repoFullName}/commits/${commit.sha}`;
+          const commitDetailResponse = await axios.get(commitDetailUrl, {
+            headers: {
+              Authorization: `token ${githubToken}`,
+              Accept: 'application/vnd.github.v3+json',
+            },
+          });
+
+          const commitDetail = commitDetailResponse.data;
+
+          // Create commit record
+          const commitData = {
+            sha: commit.sha,
+            node_id: commit.node_id,
+            author: author?._id,
+            message: commit.commit.message,
+            url: commit.url,
+            html_url: commit.html_url,
+            comments_url: commit.comments_url,
+            repository: {
+              id: pr.repository.id,
+              node_id: pr.repository.node_id,
+              name: pr.repository.name,
+              full_name: pr.repository.full_name,
+              private: pr.repository.private,
+            },
+            branch: branchName,
+            added:
+              commitDetail.files
+                ?.filter((f) => f.status === 'added')
+                .map((f) => f.filename) || [],
+            removed:
+              commitDetail.files
+                ?.filter((f) => f.status === 'removed')
+                .map((f) => f.filename) || [],
+            modified:
+              commitDetail.files
+                ?.filter((f) => f.status === 'modified')
+                .map((f) => f.filename) || [],
+            created_at: new Date(
+              commit.commit.author.date || commit.commit.committer.date,
+            ),
+            stats: {
+              total: commitDetail.stats?.total || 0,
+              additions: commitDetail.stats?.additions || 0,
+              deletions: commitDetail.stats?.deletions || 0,
+            },
+          };
+
+          // Check if this commit already exists
+          const existingCommit = await this.commitModel.findOne({
+            sha: commit.sha,
+          });
+          if (!existingCommit) {
+            await this.commitModel.create(commitData);
+            totalCommitsCreated++;
+          }
+        }
+      } catch (error) {
+        console.error(
+          `Error fetching commits for PR #${pr.prNumber} in ${pr.repository?.full_name}:`,
+          error.message,
+        );
+        failedPRs++;
+        errors.push({
+          pr: `${pr.repository?.full_name}#${pr.prNumber}`,
+          error: error.message,
+        });
+      }
+    }
+
+    return {
+      processedPRs: pullRequests.length,
+      commitsCreated: totalCommitsCreated,
+      failedPRs,
+      errors,
+    };
+  }
+
+  async updateCommitCounts(repository?: string) {
+    // Query to find PRs to update
+    const query: any = {};
+    if (repository) {
+      query['repository.full_name'] = repository;
+    }
+
+    // Get all PRs
+    const pullRequests = await this.pullRequestModel.find(query);
+    console.log(
+      `Found ${pullRequests.length} PRs to check for commit count updates`,
+    );
+
+    let updatedCount = 0;
+    let newCommitsCreated = 0;
+    let errors = 0;
+
+    // Group PRs by repository and branch
+    const prsByRepoBranch: Record<string, PullRequest[]> = pullRequests.reduce(
+      (acc, pr) => {
+        const key = `${pr.repository.full_name}:${pr.head?.ref || ''}`;
+        if (!acc[key]) {
+          acc[key] = [];
+        }
+        acc[key].push(pr);
+        return acc;
+      },
+      {} as Record<string, PullRequest[]>,
+    );
+
+    // Process each repository/branch group
+    for (const [repoBranchKey, prs] of Object.entries<PullRequest[]>(
+      prsByRepoBranch,
+    )) {
+      try {
+        const [repoFullName, branchName] = repoBranchKey.split(':');
+        if (!branchName) {
+          console.log(
+            `Skipping PRs for ${repoFullName} with no branch information`,
+          );
+          continue;
+        }
+
+        // Find all commits for this repository and branch
+        const commits = await this.commitModel
+          .find({
+            'repository.full_name': repoFullName,
+            branch: branchName,
+          })
+          .sort({ created_at: 1 });
+
+        if (commits.length === 0) {
+          console.log(`No commits found for ${repoFullName}:${branchName}`);
+          continue;
+        }
+
+        // Get the most recent PR for this branch
+        const sortedPRs = [...prs].sort(
+          (a, b) =>
+            new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+        );
+        const latestPR = sortedPRs[0];
+
+        // Count total commits for this branch
+        const totalCommits = commits.reduce((total, commit) => {
+          // If commit has stats.total, use that value
+          if (commit.stats?.total) {
+            return total + commit.stats.total;
+          }
+          // Otherwise count it as 1 commit
+          return total + 1;
+        }, 0);
+
+        // If we have a PR with a different commit count than what we've calculated,
+        // create a new commit record with the correct count
+        const existingCommitCount = commits.reduce(
+          (total, commit) => total + (commit.stats?.total || 0),
+          0,
+        );
+
+        // If the latest commit doesn't have the correct total, update it
+        const latestCommit = commits[commits.length - 1];
+        if (latestCommit && latestCommit.stats?.total !== totalCommits) {
+          // Create a new commit record with the correct count
+          const commitData = {
+            sha: latestCommit.sha,
+            node_id: latestCommit.node_id,
+            author: latestCommit.author,
+            message: `Updated commit count for PR #${latestPR.prNumber}: ${latestPR.title}`,
+            url: latestCommit.url,
+            html_url: latestCommit.html_url,
+            comments_url: latestCommit.comments_url,
+            repository: latestCommit.repository,
+            branch: branchName,
+            added: [],
+            removed: [],
+            modified: [],
+            created_at: latestCommit.created_at || new Date(),
+            stats: {
+              total: totalCommits,
+              additions: latestCommit.stats?.additions || 0,
+              deletions: latestCommit.stats?.deletions || 0,
+            },
+          };
+
+          await this.commitModel.create(commitData);
+          newCommitsCreated++;
+          updatedCount++;
+          console.log(
+            `Updated commit count for PR #${latestPR.prNumber} in ${repoFullName} to ${totalCommits} (was ${existingCommitCount})`,
+          );
+        }
+      } catch (error) {
+        console.error(
+          `Error updating commit count for ${repoBranchKey}:`,
+          error.message,
+        );
+        errors++;
+      }
+    }
+
+    return {
+      totalPRs: pullRequests.length,
+      updatedCount,
+      newCommitsCreated,
+      errors,
+    };
   }
 }
